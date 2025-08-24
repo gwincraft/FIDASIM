@@ -9430,6 +9430,85 @@ subroutine get_ddpt_anisotropy(plasma, v1, v3, kappa)
 
 end subroutine get_ddpt_anisotropy
 
+subroutine get_ddnhe_anisotropy(plasma, v1, v3, kappa)
+    !+ Gets d(d,n)3He anisotropy defecit/enhancement factor for a beam interacting with a target plasma
+    type(LocalProfiles), intent(in)         :: plasma
+        !+ Plasma Paramters
+    real(Float64), dimension(3), intent(in) :: v1
+        !+ Beam velocity [cm/s]
+    real(Float64), dimension(3), intent(in) :: v3
+        !+ Neutron velocity [cm/s]
+    real(Float64), intent(out)              :: kappa
+        !+ Anisotropy factor
+    !+ Reference: Eq. (1) and (3) of NIM A236 (1985) 380
+
+    real(Float64), dimension(3,12) :: abc
+    real(Float64), dimension(12)   :: bhcor
+    real(Float64), dimension(12)   :: e, a, b, c
+    real(Float64), dimension(3)    :: vcm, v3cm, vrel
+    type(InterpolCoeffs1D) :: c1D
+
+    real(Float64) :: ai, bi, ci, b1, b2, b11, b12, b21, b22, cos_phi, sin_phi
+    real(Float64) :: eb, e1com, vnet_square, cos_theta, k, KE, Q, mp, k0, JMeV
+    integer :: ei, i, err_status
+
+    !! Calculate effective beam energy
+    vrel = v1-plasma%vrot ![cm/s]
+    vnet_square=dot_product(vrel, vrel) ![(cm/s)**2]
+    eb = v2_to_E_per_amu*fbm%A*vnet_square ![keV]
+
+    !!Calculate anisotropy enhancement/deficit factor
+    JMeV = 1.60218d-13 ! Conversion factor from MeV to Joules
+    mp = H1_amu*mass_u  ![kg]
+    Q = 3.27*JMeV ![J]
+
+    vcm = 0.5*(v1+plasma%vrot) ![cm/s]
+    KE = 0.5*mp*vnet_square*1.d-4  ! [J] C-O-M kinetic energy
+    k0 = norm2(vcm) * sqrt(2*mp/(3*(Q+KE)))*100.d0 ![(cm/s)**2]
+    if ((norm2(vcm)*norm2(v3)).gt.0.d0) then
+        cos_phi = dot_product(vcm, v3) / (norm2(vcm)*norm2(v3))
+        sin_phi = sin(acos(cos_phi))
+
+        if (abs(k0*sin_phi).le.1) then
+            cos_theta = cos_phi*sqrt(1-(k0*sin_phi)**2) - k0*sin_phi**2
+        else
+            cos_theta = 0.d0
+        endif
+
+    else
+        cos_theta = 0.d0
+    endif
+
+    !Brown-Jarmie coefficients in Table I with prepended isotropic low-energy extrapolated point
+    e = [0.0,19.944,29.935,39.927,49.922,59.917,69.914,79.912,89.911,99.909,109.909,116.909]
+    a = [0.0,0.0181,0.0782,0.178,0.2994,0.4406,0.564,0.716,0.8769,1.018,1.138,1.231]
+    b = [0.0,0.0108,0.0425,0.1027,0.212,0.303,0.446,0.537,0.674,0.755,1.09,1.05]
+    c = [0.0,0.0,0.0,0.0,0.0,0.049,0.111,0.052,0.095,0.2,0.09,0.2]
+    e(1) = 10.0
+    a(1) = 0.00903775/(4*pi)
+    abc(1,:) = a ; abc(2,:) = b ; abc(3,:) = c
+
+    !Correction factor to make it consistent with Bosch & Hale
+    bhcor=[1.0, 1.00648, 1.00817, 1.00431, 0.99405, .98711, .99591, 1.02146, .99845, 1.00157, .98565, 1.00405]
+    do i=1,12
+        abc(:,i) = abc(:,i)*bhcor(i)
+    enddo
+
+    e1com=0.5d0*eb
+    call interpol_coeff(e, e1com, c1D, err_status)
+
+    ei = c1D%i
+    b1 = c1D%b1
+    b2 = c1D%b2
+
+    ai = b1*abc(1,ei) + b2*abc(1,ei+1)
+    bi = b1*abc(2,ei) + b2*abc(2,ei+1)
+    ci = b1*abc(3,ei) + b2*abc(3,ei+1)
+
+    kappa = (ai + bi*cos_theta**2 + ci*cos_theta**4) / (ai+bi/3.d0+ci/5.d0)
+
+end subroutine get_ddnhe_anisotropy
+
 subroutine get_pgyro(fields,E3,E1,pitch,plasma,v3_xyz,pgyro,gam0)
     !+ Returns fraction of gyroangles that can produce a reaction with
     !+ given inputs
@@ -13181,6 +13260,164 @@ subroutine neutron_mc
 
 end subroutine neutron_mc
 
+subroutine neutron_spec_mc
+    !+ Calculate neutron collimator flux using a Monte Carlo Fast-ion distribution
+    integer :: iion, igamma, ngamma, ichan
+    type(FastIon) :: fast_ion
+    type(LocalProfiles) :: plasma
+    type(LocalEMFields) :: fields
+    real(Float64) :: eb, flux, kappa
+    real(Float64), dimension(3) :: ri, vi, uvw, uvw_vi
+    real(Float64), dimension(3) :: rn, vn, r_detector
+    real(Float64) :: vnet_square
+    real(Float64) :: phi, s, c, factor, delta_phi
+    real(Float64) :: d, domega, los_angle, max_angle
+    logical :: visible
+    
+    if(.not.any(thermal_mass.eq.H2_amu)) then
+        write(*,'(T2,a)') 'NEUTRON_SPEC_MC: Thermal Deuterium is not present in plasma'
+        return
+    endif
+    if(any(thermal_mass.eq.H3_amu)) then
+        write(*,'(T2,a)') 'NEUTRON_SPEC_MC: D-T neutron production is not implemented'
+    endif
+    if(beam_mass.ne.H2_amu) then
+        write(*,'(T2,a)') 'NEUTRON_SPEC_MC: Fast-ion species is not Deuterium'
+        return
+    endif
+
+    if(inputs%verbose.ge.1) then
+        write(*,'(T6,"# of markers: ",i10)') particles%nparticle
+        write(*,'(T6,"# of channels: ",i10)') nc_chords%nchan
+    endif
+
+    !! Correct neutron flux when equilibrium is 3D and MC distribution is 4D
+    if(particles%axisym.and.(inter_grid%nphi.gt.1)) then
+        delta_phi = inter_grid%phi(inter_grid%nphi)-inter_grid%phi(1)
+        delta_phi = delta_phi + delta_phi/(inter_grid%nphi-1)/2 !Add half a cell
+        factor = delta_phi/(2*pi) * 2 !Riemann sum below assumes coord's are at midpoint of cell
+    else
+        factor = 1
+    endif
+
+    flux = 0.0
+    ngamma = 20
+    !$OMP PARALLEL DO schedule(guided) private(iion,fast_ion,vi,ri,s,c, &
+    !$OMP& plasma,fields,uvw,uvw_vi,vnet_square,flux,eb,igamma,phi,ichan, &
+    !$OMP& rn,vn,r_detector,d,domega,visible,los_angle,max_angle,kappa)
+    loop_over_fast_ions: do iion=istart,particles%nparticle,istep
+        fast_ion = particles%fast_ion(iion)
+        if(fast_ion%vabs.eq.0.d0) cycle loop_over_fast_ions
+
+        !! Calculate position in machine coordinates
+        if(particles%axisym) then
+            s = 0.d0
+            c = 1.d0
+        else
+            phi = fast_ion%phi
+            s = sin(phi)
+            c = cos(phi)
+        endif
+
+        uvw(1) = fast_ion%r*c
+        uvw(2) = fast_ion%r*s
+        uvw(3) = fast_ion%z
+
+        !! Loop over collimator channels
+        channel_loop: do ichan=1, nc_chords%nchan
+            r_detector = nc_chords%det(ichan)%detector%origin
+            
+            !! Check if particle is visible from detector
+            !! Simple geometric check - could be refined
+            d = norm2(r_detector - uvw)
+            vn = (uvw - r_detector)/d  ! Unit vector from detector to particle
+            
+            !! Check if particle is within aperture solid angle
+            !! This is a simplified visibility check
+            rn = nc_chords%det(ichan)%aperture%origin - r_detector
+            los_angle = acos(dot_product(vn, rn/norm2(rn)))
+            
+            !! Maximum acceptance angle (approximate)
+            if (nc_chords%det(ichan)%detector%shape.eq.1) then
+                max_angle = max(nc_chords%det(ichan)%detector%hw, &
+                               nc_chords%det(ichan)%detector%hh) / norm2(rn)
+            else
+                max_angle = sqrt(nc_chords%det(ichan)%detector%hw**2 + &
+                                nc_chords%det(ichan)%detector%hh**2) / norm2(rn)
+            endif
+            
+            visible = (los_angle .le. max_angle)
+            if(.not.visible) cycle channel_loop
+
+            !! Calculate solid angle
+            if (nc_chords%det(ichan)%detector%shape.eq.1) then
+                domega = nc_chords%det(ichan)%detector%hh*nc_chords%det(ichan)%detector%hw / &
+                        (pi * d**2)
+            else
+                domega = nc_chords%det(ichan)%detector%hh*nc_chords%det(ichan)%detector%hw / &
+                        (4 * d**2)
+            endif
+
+            if(inputs%dist_type.eq.2) then
+                !! Get electromagnetic fields
+                call get_fields(fields, pos=uvw, input_coords=1)
+                if(.not.fields%in_plasma) cycle channel_loop
+
+                gyro_loop: do igamma=1,ngamma
+                    !! Correct for Gyro-motion
+                    call gyro_correction(fields, fast_ion%energy, fast_ion%pitch, fast_ion%A, ri, vi)
+
+                    !! Get plasma parameters
+                    call get_plasma(plasma,pos=ri)
+                    if(.not.plasma%in_plasma) cycle gyro_loop
+
+                    !! Calculate effective beam energy
+                    vnet_square=dot_product(vi-plasma%vrot,vi-plasma%vrot)  ![cm/s]
+                    eb = v2_to_E_per_amu*fast_ion%A*vnet_square ![kev]
+
+                    !! Get neutron production rate
+                    call get_dd_rate(plasma, eb, flux, branch=2)
+                    
+                    !! Apply anisotropy correction
+                    call get_ddnhe_anisotropy(plasma, vi, vn, kappa)
+                    flux = flux * kappa * fast_ion%weight * domega / ngamma * factor
+
+                    !! Store neutrons
+                    call store_neutrons(flux, fast_ion%class, neutron_collimator=.True., channel=ichan)
+                enddo gyro_loop
+            else
+                !! Get plasma parameters
+                call get_plasma(plasma,pos=uvw,input_coords=1)
+                if(.not.plasma%in_plasma) cycle channel_loop
+
+                !! Calculate effective beam energy
+                uvw_vi(1) = fast_ion%vr
+                uvw_vi(2) = fast_ion%vt
+                uvw_vi(3) = fast_ion%vz
+                vi = matmul(beam_grid%inv_basis,uvw_vi)
+                vnet_square=dot_product(vi-plasma%vrot,vi-plasma%vrot)  ![cm/s]
+                eb = v2_to_E_per_amu*fast_ion%A*vnet_square ![kev]
+
+                !! Get neutron production rate
+                call get_dd_rate(plasma, eb, flux, branch=2)
+                
+                !! Apply anisotropy correction
+                call get_ddnhe_anisotropy(plasma, vi, vn, kappa)
+                flux = flux * kappa * fast_ion%weight * domega * factor
+
+                !! Store neutrons
+                call store_neutrons(flux, fast_ion%class, neutron_collimator=.True., channel=ichan)
+            endif
+        enddo channel_loop
+    enddo loop_over_fast_ions
+    !$OMP END PARALLEL DO
+
+#ifdef _MPI
+    call parallel_sum(neutron%flux)
+#endif
+
+end subroutine neutron_spec_mc
+
 subroutine fida_weights_mc
     !+ Calculates FIDA weights
     integer :: i,j,k,ic,ncell
@@ -13760,7 +13997,7 @@ subroutine neutron_spec_f
     type(LocalProfiles) :: plasma
     type(LocalEMFields) :: fields
     real(Float64) :: eb, pitch
-    real(Float64) :: erel, flux, d, domega
+    real(Float64) :: erel, flux, d, domega, kappa
     real(Float64), dimension(3) :: ri
     real(Float64), dimension(3) :: vi
     real(Float64), dimension(3) :: rn, vn, r_gyro
@@ -13770,11 +14007,20 @@ subroutine neutron_spec_f
     integer :: ntrack
     integer :: i      !! counter along track
     type(ParticleTrack),dimension(pass_grid%ntrack) :: tracks
+    logical :: beam_available
+    real(Float64) :: track_step
+    
+    !! Check if the beam is available
+    beam_available = allocated(fbm%energy) .and. allocated(fbm%pitch)
+    
+    if (.not.beam_available .and. inputs%verbose.ge.1) then
+    	write(*,'(T2,a)') 'NEUTRON_SPEC_F: Running without beam grid - using track-based volumes'
+    endif
 
     ngamma = 20
     flux = 0
     !$OMP PARALLEL DO schedule(guided) private(fields,vn,vi,ri,pitch,eb,ind,domega,ntrack,i,&
-    !$OMP& ie,ip,ichan,igamma,plasma,factor,rn,vnet_square,flux,erel,d,fbm_denf,r_gyro,tracks)
+    !$OMP& ie,ip,ichan,igamma,plasma,factor,rn,vnet_square,flux,erel,d,fbm_denf,r_gyro,tracks,kappa,track_step)
     channel_loop: do ichan=1, nc_chords%nchan
 
         rn = nc_chords%det(ichan)%detector%origin
@@ -13787,6 +14033,16 @@ subroutine neutron_spec_f
         !! Calculate the flux produced in each cell along the path
         loop_along_track: do i=1,ntrack
             rn = tracks(i)%pos
+            
+            if (i.lt.ntrack) then
+                track_step = norm2(tracks(i+1)%pos - tracks(i)%pos)
+            else
+                if (i.gt.1) then
+                    track_step = norm2(tracks(i)%pos - tracks(i-1)%pos)
+                else
+                    track_step = 0.1d0
+                endif
+            endif
 
             !! Get fields
             call get_fields(fields,pos=rn)
@@ -13804,7 +14060,10 @@ subroutine neutron_spec_f
 
             call get_indices(rn, ind)
          !!!factor = domega*fbm%r(ind(1))*fbm%dr*fbm%dz*fbm%dphi/ngamma
-            factor = domega*beam_grid%dv/ngamma
+         !!!factor = domega*beam_grid%dv/ngamma
+            factor = domega*track_step/ngamma
+            
+            if (beam_available) then
             !! Loop over energy/pitch/gamma
             pitch_loop: do ip = 1, fbm%npitch
                 pitch = fbm%pitch(ip)
@@ -13832,7 +14091,11 @@ subroutine neutron_spec_f
                         erel = v2_to_E_per_amu*fbm%A*vnet_square ![kev]
 
                         !! Get neutron production flux
-                        call get_dd_rate(plasma, erel, flux, branch=2)
+                        call get_dd_rate(plasma,erel,flux,branch=2)
+                
+                	!! Apply anisotropy correction for neutron emission
+                        call get_ddnhe_anisotropy(plasma,vi,vn,kappa)
+                        flux = flux*kappa
                         flux = flux*2*fbm_denf*factor
                         !Factor of 2 above is to convert fbm to ions/(cm^3 dE (domega/4pi))
 
@@ -13841,6 +14104,7 @@ subroutine neutron_spec_f
                     enddo gyro_loop
                 enddo energy_loop
             enddo pitch_loop
+            endif
         enddo loop_along_track
     enddo channel_loop
     !$OMP END PARALLEL DO
@@ -14284,6 +14548,7 @@ program fidasim
             if(inputs%calc_neut_spec.ge.1) call neutron_spec_f
         else
             call neutron_mc()
+            if(inputs%calc_neut_spec.ge.1) call neutron_spec_mc
         endif
         if(inputs%verbose.ge.1) write(*,'(30X,a)') ''
     endif
