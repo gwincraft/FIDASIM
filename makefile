@@ -244,6 +244,19 @@ test: src
 
 clean_tests:
 	-rm -rf test/unit_tests/build
+	-rm -rf test/python_tests/__pycache__
+	-rm -rf test/python_tests/.pytest_cache
+	-find test/python_tests -name "*.pyc" -delete
+
+.PHONY: test-python
+test-python:
+	@echo "Running Python unit tests..."
+	@cd test/python_tests && \
+	$(PYTHON_EXEC) -m pytest -v --tb=short
+
+.PHONY: test-all
+test-all: test test-python
+	@echo "All tests completed"
 
 help:
 	@echo ""
@@ -251,7 +264,11 @@ help:
 	@echo "    fidasim"
 	@echo "        Builds fidasim executable (Default Target)"
 	@echo "    test"
-	@echo "        Builds and runs unit tests using pFUnit"
+	@echo "        Builds and runs Fortran unit tests using pFUnit"
+	@echo "    test-python"
+	@echo "        Runs Python unit tests using pytest"
+	@echo "    test-all"
+	@echo "        Runs both Fortran and Python unit tests"
 	@echo "    docs"
 	@echo "        Builds FIDASIM documentation website in $(DOCS_DIR)/html"
 	@echo "    clean"
