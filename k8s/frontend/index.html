@@ -1,0 +1,822 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FIDASIM Web Interface</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+        }
+        .container-main {
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            padding: 30px;
+            margin-top: 30px;
+        }
+        .nav-tabs .nav-link.active {
+            background-color: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+        }
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+        }
+        .progress-bar {
+            background: linear-gradient(90deg, #667eea, #764ba2);
+        }
+        .file-drop-zone {
+            border: 2px dashed #667eea;
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .file-drop-zone:hover {
+            background-color: #f8f9fa;
+        }
+        .file-drop-zone.dragover {
+            background-color: #e9ecef;
+            border-color: #764ba2;
+        }
+        .worker-card {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 10px;
+        }
+        .scaling-curve-chart {
+            height: 300px;
+        }
+        .run-config-card {
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+        .status-badge {
+            padding: 5px 10px;
+            border-radius: 20px;
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+        .status-running { background-color: #ffc107; color: #000; }
+        .status-completed { background-color: #28a745; color: #fff; }
+        .status-failed { background-color: #dc3545; color: #fff; }
+        .status-pending { background-color: #6c757d; color: #fff; }
+    </style>
+</head>
+<body>
+    <div class="container container-main">
+        <h1 class="text-center mb-4">
+            <i class="bi bi-lightning-charge"></i> FIDASIM Web Interface
+        </h1>
+        
+        <!-- Navigation Tabs -->
+        <ul class="nav nav-tabs mb-4" id="mainTabs">
+            <li class="nav-item">
+                <a class="nav-link active" data-bs-toggle="tab" href="#setup">
+                    <i class="bi bi-gear"></i> Setup
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" data-bs-toggle="tab" href="#batch">
+                    <i class="bi bi-collection"></i> Batch Runs
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" data-bs-toggle="tab" href="#monitor">
+                    <i class="bi bi-activity"></i> Monitor
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" data-bs-toggle="tab" href="#scaling">
+                    <i class="bi bi-graph-up"></i> Scaling
+                </a>
+            </li>
+        </ul>
+
+        <!-- Tab Content -->
+        <div class="tab-content">
+            <!-- Setup Tab -->
+            <div class="tab-pane fade show active" id="setup">
+                <h3>Input Files</h3>
+                
+                <div class="row mb-4">
+                    <div class="col-md-6">
+                        <h5>Namelist File</h5>
+                        <div class="file-drop-zone" id="namelistDropZone">
+                            <i class="bi bi-cloud-upload" style="font-size: 2rem;"></i>
+                            <p>Drop namelist file here or click to browse</p>
+                            <input type="file" id="namelistFile" accept=".nml,.namelist" style="display: none;">
+                        </div>
+                        <div id="namelistInfo" class="mt-2"></div>
+                    </div>
+                    
+                    <div class="col-md-6">
+                        <h5>Input Files</h5>
+                        <div class="file-drop-zone" id="inputDropZone">
+                            <i class="bi bi-cloud-upload" style="font-size: 2rem;"></i>
+                            <p>Drop input files here (.h5, .cdf, .geqdsk)</p>
+                            <input type="file" id="inputFiles" multiple accept=".h5,.hdf5,.cdf,.nc,.geqdsk" style="display: none;">
+                        </div>
+                        <div id="inputInfo" class="mt-2"></div>
+                    </div>
+                </div>
+
+                <h4>Run Options</h4>
+                <div class="row">
+                    <div class="col-md-4">
+                        <h6>Physics Calculations</h6>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="calcFida" checked>
+                            <label class="form-check-label" for="calcFida">FIDA</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="calcNPA" checked>
+                            <label class="form-check-label" for="calcNPA">NPA</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="calcNeutron">
+                            <label class="form-check-label" for="calcNeutron">Neutrons</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="calcNeutSpec">
+                            <label class="form-check-label" for="calcNeutSpec">Neutron Spectroscopy</label>
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-4">
+                        <h6>Weight Functions</h6>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="calcFidaWght">
+                            <label class="form-check-label" for="calcFidaWght">FIDA Weights</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="calcNPAWght">
+                            <label class="form-check-label" for="calcNPAWght">NPA Weights</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="calcNCWght">
+                            <label class="form-check-label" for="calcNCWght">NC Weights</label>
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-4">
+                        <h6>Monte Carlo Settings</h6>
+                        <div class="mb-2">
+                            <label for="nFida" class="form-label">N_FIDA particles</label>
+                            <input type="number" class="form-control" id="nFida" value="5000000">
+                        </div>
+                        <div class="mb-2">
+                            <label for="nNPA" class="form-label">N_NPA particles</label>
+                            <input type="number" class="form-control" id="nNPA" value="5000000">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Batch Runs Tab -->
+            <div class="tab-pane fade" id="batch">
+                <h3>Configure Batch Runs</h3>
+                
+                <div class="row mb-4">
+                    <div class="col-md-6">
+                        <h5>Parameter Scan</h5>
+                        <div class="mb-3">
+                            <label class="form-label">Scan Parameter</label>
+                            <select class="form-select" id="scanParameter">
+                                <option value="none">No scan</option>
+                                <option value="time">Time [s]</option>
+                                <option value="einj">Beam Energy [keV]</option>
+                                <option value="pinj">Beam Power [MW]</option>
+                                <option value="custom">Custom Parameter</option>
+                            </select>
+                        </div>
+                        
+                        <div id="scanConfig" style="display: none;">
+                            <div class="row">
+                                <div class="col-md-4">
+                                    <label class="form-label">Start</label>
+                                    <input type="number" class="form-control" id="scanStart" step="0.1">
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label">End</label>
+                                    <input type="number" class="form-control" id="scanEnd" step="0.1">
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label">Steps</label>
+                                    <input type="number" class="form-control" id="scanSteps" value="10">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-6">
+                        <h5>Run Configuration</h5>
+                        <div class="mb-3">
+                            <label class="form-label">Number of Runs</label>
+                            <input type="number" class="form-control" id="nRuns" value="1" min="1">
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="form-label">Estimated Complexity</label>
+                            <select class="form-select" id="runComplexity">
+                                <option value="uniform">Uniform (all equal)</option>
+                                <option value="linear">Linear increase</option>
+                                <option value="custom">Custom weights</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="runConfigs" class="mb-4">
+                    <h5>Individual Run Configurations</h5>
+                    <div id="runConfigList"></div>
+                    <button class="btn btn-outline-primary btn-sm" onclick="addRunConfig()">
+                        <i class="bi bi-plus-circle"></i> Add Run
+                    </button>
+                </div>
+                
+                <div class="row">
+                    <div class="col-md-12">
+                        <button class="btn btn-primary btn-lg" onclick="submitBatch()">
+                            <i class="bi bi-play-circle"></i> Submit Batch Job
+                        </button>
+                        <button class="btn btn-outline-secondary btn-lg ms-2" onclick="previewDistribution()">
+                            <i class="bi bi-eye"></i> Preview Distribution
+                        </button>
+                    </div>
+                </div>
+                
+                <div id="distributionPreview" class="mt-4" style="display: none;">
+                    <h5>Optimal Distribution Preview</h5>
+                    <div id="distributionDetails"></div>
+                </div>
+            </div>
+
+            <!-- Monitor Tab -->
+            <div class="tab-pane fade" id="monitor">
+                <h3>Job Monitor</h3>
+                
+                <div class="row mb-4">
+                    <div class="col-md-12">
+                        <div class="input-group">
+                            <input type="text" class="form-control" id="jobNameSearch" placeholder="Enter job name">
+                            <button class="btn btn-primary" onclick="loadJobStatus()">
+                                <i class="bi bi-search"></i> Load Status
+                            </button>
+                            <button class="btn btn-outline-secondary" onclick="refreshAllJobs()">
+                                <i class="bi bi-arrow-clockwise"></i> Refresh All
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="activeJobs">
+                    <h5>Active Jobs</h5>
+                    <div id="activeJobsList"></div>
+                </div>
+                
+                <div id="jobDetails" class="mt-4" style="display: none;">
+                    <h5>Job Details: <span id="currentJobName"></span></h5>
+                    
+                    <div class="row mb-3">
+                        <div class="col-md-12">
+                            <div class="progress" style="height: 30px;">
+                                <div id="jobProgressBar" class="progress-bar progress-bar-striped progress-bar-animated" 
+                                     role="progressbar" style="width: 0%">0%</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="row">
+                        <div class="col-md-4">
+                            <div class="card">
+                                <div class="card-body">
+                                    <h6 class="card-title">Total Runs</h6>
+                                    <h3 id="totalRuns">0</h3>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="card">
+                                <div class="card-body">
+                                    <h6 class="card-title">Completed</h6>
+                                    <h3 id="completedRuns">0</h3>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="card">
+                                <div class="card-body">
+                                    <h6 class="card-title">Workers</h6>
+                                    <h3 id="nWorkers">0</h3>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div id="workerStatus" class="mt-4">
+                        <h6>Worker Status</h6>
+                        <div id="workerList"></div>
+                    </div>
+                </div>
+                
+                <div id="clusterResources" class="mt-4">
+                    <h5>Cluster Resources</h5>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="card">
+                                <div class="card-body">
+                                    <h6>Available CPUs</h6>
+                                    <div class="progress">
+                                        <div id="cpuBar" class="progress-bar" style="width: 0%"></div>
+                                    </div>
+                                    <small id="cpuText">0 / 0 cores</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="card">
+                                <div class="card-body">
+                                    <h6>Available Memory</h6>
+                                    <div class="progress">
+                                        <div id="memBar" class="progress-bar" style="width: 0%"></div>
+                                    </div>
+                                    <small id="memText">0 / 0 GB</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Scaling Tab -->
+            <div class="tab-pane fade" id="scaling">
+                <h3>Scaling Configuration</h3>
+                
+                <div class="row">
+                    <div class="col-md-6">
+                        <h5>Multi-Core Scaling Curve</h5>
+                        <p>Define how FIDASIM performance scales with core count</p>
+                        
+                        <div id="scalingInputs">
+                            <table class="table">
+                                <thead>
+                                    <tr>
+                                        <th>Cores</th>
+                                        <th>Speedup</th>
+                                        <th>Efficiency</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="scalingTable">
+                                    <tr>
+                                        <td><input type="number" class="form-control" value="1" readonly></td>
+                                        <td><input type="number" class="form-control" value="1.0" step="0.1" readonly></td>
+                                        <td>100%</td>
+                                    </tr>
+                                    <tr>
+                                        <td><input type="number" class="form-control" value="2"></td>
+                                        <td><input type="number" class="form-control" value="1.9" step="0.1"></td>
+                                        <td>95%</td>
+                                    </tr>
+                                    <tr>
+                                        <td><input type="number" class="form-control" value="4"></td>
+                                        <td><input type="number" class="form-control" value="3.6" step="0.1"></td>
+                                        <td>90%</td>
+                                    </tr>
+                                    <tr>
+                                        <td><input type="number" class="form-control" value="8"></td>
+                                        <td><input type="number" class="form-control" value="6.8" step="0.1"></td>
+                                        <td>85%</td>
+                                    </tr>
+                                    <tr>
+                                        <td><input type="number" class="form-control" value="16"></td>
+                                        <td><input type="number" class="form-control" value="12.5" step="0.1"></td>
+                                        <td>78%</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                            
+                            <button class="btn btn-outline-primary btn-sm" onclick="addScalingRow()">
+                                <i class="bi bi-plus-circle"></i> Add Data Point
+                            </button>
+                            <button class="btn btn-primary ms-2" onclick="updateScalingCurve()">
+                                <i class="bi bi-graph-up"></i> Update Curve
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="col-md-6">
+                        <h5>Scaling Curve Visualization</h5>
+                        <canvas id="scalingChart" class="scaling-curve-chart"></canvas>
+                        
+                        <div class="mt-3">
+                            <h6>Cluster Configuration</h6>
+                            <div class="mb-2">
+                                <label class="form-label">Max Nodes</label>
+                                <input type="number" class="form-control" id="maxNodes" value="10">
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label">Cores per Node</label>
+                                <input type="number" class="form-control" id="coresPerNode" value="64">
+                            </div>
+                            <div class="mb-2">
+                                <label class="form-label">Memory per Node (GB)</label>
+                                <input type="number" class="form-control" id="memoryPerNode" value="256">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- Chart.js for scaling curve -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <script>
+        // API base URL
+        const API_URL = '/api';
+        
+        // Global state
+        let currentJob = null;
+        let scalingChart = null;
+        let refreshInterval = null;
+        
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeFileDropZones();
+            initializeScalingChart();
+            loadClusterResources();
+            
+            // Start periodic refresh
+            refreshInterval = setInterval(() => {
+                if (document.querySelector('#monitor').classList.contains('show')) {
+                    refreshAllJobs();
+                    loadClusterResources();
+                }
+            }, 5000);
+        });
+        
+        // File drop zone handling
+        function initializeFileDropZones() {
+            const zones = [
+                { id: 'namelistDropZone', inputId: 'namelistFile', multiple: false },
+                { id: 'inputDropZone', inputId: 'inputFiles', multiple: true }
+            ];
+            
+            zones.forEach(zone => {
+                const dropZone = document.getElementById(zone.id);
+                const fileInput = document.getElementById(zone.inputId);
+                
+                dropZone.addEventListener('click', () => fileInput.click());
+                
+                dropZone.addEventListener('dragover', (e) => {
+                    e.preventDefault();
+                    dropZone.classList.add('dragover');
+                });
+                
+                dropZone.addEventListener('dragleave', () => {
+                    dropZone.classList.remove('dragover');
+                });
+                
+                dropZone.addEventListener('drop', (e) => {
+                    e.preventDefault();
+                    dropZone.classList.remove('dragover');
+                    handleFiles(e.dataTransfer.files, zone.inputId);
+                });
+                
+                fileInput.addEventListener('change', (e) => {
+                    handleFiles(e.target.files, zone.inputId);
+                });
+            });
+        }
+        
+        function handleFiles(files, inputId) {
+            const infoDiv = inputId === 'namelistFile' ? 'namelistInfo' : 'inputInfo';
+            const fileList = Array.from(files).map(f => `<li>${f.name} (${(f.size/1024).toFixed(1)} KB)</li>`).join('');
+            document.getElementById(infoDiv).innerHTML = `<ul class="list-unstyled">${fileList}</ul>`;
+        }
+        
+        // Batch job submission
+        async function submitBatch() {
+            const scanParam = document.getElementById('scanParameter').value;
+            const nRuns = parseInt(document.getElementById('nRuns').value);
+            
+            // Collect run configurations
+            const runConfigs = [];
+            for (let i = 0; i < nRuns; i++) {
+                runConfigs.push({
+                    run_id: i,
+                    calc_fida: document.getElementById('calcFida').checked,
+                    calc_npa: document.getElementById('calcNPA').checked,
+                    calc_neutron: document.getElementById('calcNeutron').checked,
+                    calc_neut_spec: document.getElementById('calcNeutSpec').checked,
+                    calc_fida_wght: document.getElementById('calcFidaWght').checked,
+                    calc_npa_wght: document.getElementById('calcNPAWght').checked,
+                    calc_nc_wght: document.getElementById('calcNCWght').checked,
+                    n_fida: parseInt(document.getElementById('nFida').value),
+                    n_npa: parseInt(document.getElementById('nNPA').value)
+                });
+            }
+            
+            const jobRequest = {
+                name: `fidasim-${Date.now()}`,
+                n_runs: nRuns,
+                run_configs: runConfigs,
+                complexity: Array(nRuns).fill(1.0)  // Could be customized
+            };
+            
+            try {
+                const response = await fetch(`${API_URL}/submit-batch`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(jobRequest)
+                });
+                
+                const result = await response.json();
+                
+                if (result.job_name) {
+                    alert(`Job submitted successfully!\nJob Name: ${result.job_name}`);
+                    
+                    // Switch to monitor tab
+                    const monitorTab = new bootstrap.Tab(document.querySelector('a[href="#monitor"]'));
+                    monitorTab.show();
+                    
+                    // Load job status
+                    document.getElementById('jobNameSearch').value = result.job_name;
+                    loadJobStatus();
+                }
+            } catch (error) {
+                alert(`Error submitting job: ${error.message}`);
+            }
+        }
+        
+        // Job monitoring
+        async function loadJobStatus() {
+            const jobName = document.getElementById('jobNameSearch').value;
+            if (!jobName) return;
+            
+            try {
+                const response = await fetch(`${API_URL}/job-status/${jobName}`);
+                const status = await response.json();
+                
+                updateJobDisplay(status);
+            } catch (error) {
+                console.error('Error loading job status:', error);
+            }
+        }
+        
+        function updateJobDisplay(status) {
+            document.getElementById('jobDetails').style.display = 'block';
+            document.getElementById('currentJobName').textContent = status.job_name;
+            
+            // Update progress
+            const progress = Math.round(status.progress * 100);
+            const progressBar = document.getElementById('jobProgressBar');
+            progressBar.style.width = `${progress}%`;
+            progressBar.textContent = `${progress}%`;
+            
+            // Update counters
+            document.getElementById('totalRuns').textContent = status.total_runs;
+            document.getElementById('completedRuns').textContent = status.completed_runs;
+            document.getElementById('nWorkers').textContent = status.workers.length;
+            
+            // Update worker list
+            const workerList = document.getElementById('workerList');
+            workerList.innerHTML = status.workers.map(w => `
+                <div class="worker-card">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span><strong>Worker ${w.worker_id}</strong></span>
+                        <span class="status-badge status-${w.active > 0 ? 'running' : 'completed'}">
+                            ${w.active > 0 ? 'Running' : 'Completed'}
+                        </span>
+                    </div>
+                    <div class="progress mt-2" style="height: 20px;">
+                        <div class="progress-bar" style="width: ${w.progress * 100}%">
+                            ${Math.round(w.progress * 100)}%
+                        </div>
+                    </div>
+                    <small>Runs: ${w.completed_runs.length} / ${w.run_indices ? w.run_indices.length : 0}</small>
+                </div>
+            `).join('');
+        }
+        
+        async function refreshAllJobs() {
+            // This would typically load all active jobs
+            // For now, just refresh the current job if one is loaded
+            const jobName = document.getElementById('jobNameSearch').value;
+            if (jobName) {
+                loadJobStatus();
+            }
+        }
+        
+        // Cluster resources
+        async function loadClusterResources() {
+            try {
+                const response = await fetch(`${API_URL}/available-resources`);
+                const resources = await response.json();
+                
+                // Update resource display
+                // This would show actual vs available resources
+                console.log('Cluster resources:', resources);
+            } catch (error) {
+                console.error('Error loading cluster resources:', error);
+            }
+        }
+        
+        // Scaling curve
+        function initializeScalingChart() {
+            const ctx = document.getElementById('scalingChart').getContext('2d');
+            
+            scalingChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    datasets: [
+                        {
+                            label: 'Speedup',
+                            data: [],
+                            borderColor: '#667eea',
+                            backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                            yAxisID: 'y-speedup'
+                        },
+                        {
+                            label: 'Efficiency',
+                            data: [],
+                            borderColor: '#764ba2',
+                            backgroundColor: 'rgba(118, 75, 162, 0.1)',
+                            yAxisID: 'y-efficiency'
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            type: 'linear',
+                            title: {
+                                display: true,
+                                text: 'Number of Cores'
+                            }
+                        },
+                        'y-speedup': {
+                            type: 'linear',
+                            position: 'left',
+                            title: {
+                                display: true,
+                                text: 'Speedup'
+                            }
+                        },
+                        'y-efficiency': {
+                            type: 'linear',
+                            position: 'right',
+                            title: {
+                                display: true,
+                                text: 'Efficiency (%)'
+                            },
+                            max: 100
+                        }
+                    }
+                }
+            });
+            
+            // Load default curve
+            updateScalingChart();
+        }
+        
+        function updateScalingChart() {
+            const rows = document.querySelectorAll('#scalingTable tr');
+            const speedupData = [];
+            const efficiencyData = [];
+            
+            rows.forEach(row => {
+                const inputs = row.querySelectorAll('input');
+                if (inputs.length >= 2) {
+                    const cores = parseFloat(inputs[0].value);
+                    const speedup = parseFloat(inputs[1].value);
+                    const efficiency = (speedup / cores) * 100;
+                    
+                    speedupData.push({ x: cores, y: speedup });
+                    efficiencyData.push({ x: cores, y: efficiency });
+                    
+                    // Update efficiency display
+                    const effCell = row.cells[2];
+                    if (effCell) {
+                        effCell.textContent = `${efficiency.toFixed(0)}%`;
+                    }
+                }
+            });
+            
+            scalingChart.data.datasets[0].data = speedupData;
+            scalingChart.data.datasets[1].data = efficiencyData;
+            scalingChart.update();
+        }
+        
+        async function updateScalingCurve() {
+            const rows = document.querySelectorAll('#scalingTable tr');
+            const cores = [];
+            const speedup = [];
+            
+            rows.forEach(row => {
+                const inputs = row.querySelectorAll('input');
+                if (inputs.length >= 2) {
+                    cores.push(parseInt(inputs[0].value));
+                    speedup.push(parseFloat(inputs[1].value));
+                }
+            });
+            
+            const curveData = {
+                cores: cores,
+                speedup: speedup,
+                max_nodes: parseInt(document.getElementById('maxNodes').value),
+                cores_per_node: parseInt(document.getElementById('coresPerNode').value),
+                memory_per_node: parseInt(document.getElementById('memoryPerNode').value)
+            };
+            
+            try {
+                const response = await fetch(`${API_URL}/scaling-curve`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(curveData)
+                });
+                
+                const result = await response.json();
+                if (result.status === 'success') {
+                    alert('Scaling curve updated successfully!');
+                    updateScalingChart();
+                }
+            } catch (error) {
+                alert(`Error updating scaling curve: ${error.message}`);
+            }
+        }
+        
+        function addScalingRow() {
+            const tbody = document.querySelector('#scalingTable');
+            const newRow = tbody.insertRow();
+            
+            newRow.innerHTML = `
+                <td><input type="number" class="form-control" value="${tbody.rows.length * 2}"></td>
+                <td><input type="number" class="form-control" value="1.0" step="0.1"></td>
+                <td>-</td>
+            `;
+            
+            // Add event listeners
+            newRow.querySelectorAll('input').forEach(input => {
+                input.addEventListener('change', updateScalingChart);
+            });
+        }
+        
+        // Parameter scan handling
+        document.getElementById('scanParameter').addEventListener('change', function() {
+            const scanConfig = document.getElementById('scanConfig');
+            scanConfig.style.display = this.value !== 'none' ? 'block' : 'none';
+            
+            if (this.value !== 'none') {
+                updateRunCount();
+            }
+        });
+        
+        document.getElementById('scanSteps').addEventListener('change', updateRunCount);
+        
+        function updateRunCount() {
+            const scanParam = document.getElementById('scanParameter').value;
+            if (scanParam !== 'none') {
+                const steps = parseInt(document.getElementById('scanSteps').value) || 1;
+                document.getElementById('nRuns').value = steps;
+            }
+        }
+        
+        // Preview distribution
+        async function previewDistribution() {
+            const nRuns = parseInt(document.getElementById('nRuns').value);
+            
+            // For now, just show a simple preview
+            const preview = document.getElementById('distributionPreview');
+            const details = document.getElementById('distributionDetails');
+            
+            preview.style.display = 'block';
+            details.innerHTML = `
+                <div class="alert alert-info">
+                    <h6>Distribution Preview</h6>
+                    <p>Total Runs: ${nRuns}</p>
+                    <p>Optimal configuration will be calculated based on available resources when job is submitted.</p>
+                </div>
+            `;
+        }
+    </script>
+</body>
+</html>

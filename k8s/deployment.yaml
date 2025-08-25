@@ -1,0 +1,336 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fidasim
+
+---
+# Persistent Volume Claims for shared data
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fidasim-input-pvc
+  namespace: fidasim
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: nfs-storage  # Adjust based on your cluster
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fidasim-output-pvc
+  namespace: fidasim
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 500Gi
+  storageClassName: nfs-storage
+
+---
+# Redis for job queue
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: fidasim
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:alpine
+        ports:
+        - containerPort: 6379
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-service
+  namespace: fidasim
+spec:
+  selector:
+    app: redis
+  ports:
+  - port: 6379
+    targetPort: 6379
+
+---
+# FIDASIM Controller/Scheduler
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fidasim-controller
+  namespace: fidasim
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fidasim-controller
+  template:
+    metadata:
+      labels:
+        app: fidasim-controller
+    spec:
+      serviceAccountName: fidasim-controller
+      containers:
+      - name: controller
+        image: fidasim/controller:latest
+        ports:
+        - containerPort: 5000
+        env:
+        - name: REDIS_HOST
+          value: redis-service
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1"
+          limits:
+            memory: "4Gi"
+            cpu: "2"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fidasim-controller-service
+  namespace: fidasim
+spec:
+  selector:
+    app: fidasim-controller
+  ports:
+  - port: 5000
+    targetPort: 5000
+
+---
+# Service Account and RBAC for controller to manage jobs
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fidasim-controller
+  namespace: fidasim
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: fidasim-controller
+  namespace: fidasim
+rules:
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["pods", "pods/log"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: fidasim-controller
+  namespace: fidasim
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: fidasim-controller
+subjects:
+- kind: ServiceAccount
+  name: fidasim-controller
+  namespace: fidasim
+
+---
+# Web Frontend
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fidasim-frontend
+  namespace: fidasim
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: fidasim-frontend
+  template:
+    metadata:
+      labels:
+        app: fidasim-frontend
+    spec:
+      containers:
+      - name: frontend
+        image: fidasim/frontend:latest
+        ports:
+        - containerPort: 80
+        env:
+        - name: API_URL
+          value: http://fidasim-controller-service:5000
+        volumeMounts:
+        - name: input-data
+          mountPath: /app/inputs
+        - name: output-data
+          mountPath: /app/outputs
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+      volumes:
+      - name: input-data
+        persistentVolumeClaim:
+          claimName: fidasim-input-pvc
+      - name: output-data
+        persistentVolumeClaim:
+          claimName: fidasim-output-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fidasim-frontend-service
+  namespace: fidasim
+spec:
+  selector:
+    app: fidasim-frontend
+  ports:
+  - port: 80
+    targetPort: 80
+
+---
+# Results Viewer
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fidasim-results
+  namespace: fidasim
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: fidasim-results
+  template:
+    metadata:
+      labels:
+        app: fidasim-results
+    spec:
+      containers:
+      - name: results
+        image: fidasim/results:latest
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - name: output-data
+          mountPath: /app/outputs
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1"
+      volumes:
+      - name: output-data
+        persistentVolumeClaim:
+          claimName: fidasim-output-pvc
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fidasim-results-service
+  namespace: fidasim
+spec:
+  selector:
+    app: fidasim-results
+  ports:
+  - port: 80
+    targetPort: 80
+
+---
+# Ingress for external access
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fidasim-ingress
+  namespace: fidasim
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod  # Optional SSL
+spec:
+  rules:
+  - host: fidasim.example.com  # Change to your domain
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: fidasim-frontend-service
+            port:
+              number: 80
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: fidasim-controller-service
+            port:
+              number: 5000
+      - path: /results
+        pathType: Prefix
+        backend:
+          service:
+            name: fidasim-results-service
+            port:
+              number: 80
+
+---
+# HPA for auto-scaling frontend based on load
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: fidasim-frontend-hpa
+  namespace: fidasim
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: fidasim-frontend
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80

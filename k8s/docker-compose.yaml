@@ -1,0 +1,83 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - fidasim-net
+
+  controller:
+    build:
+      context: ..
+      dockerfile: docker/controller.Dockerfile
+    ports:
+      - "5000:5000"
+    environment:
+      - REDIS_HOST=redis
+    depends_on:
+      - redis
+    networks:
+      - fidasim-net
+    volumes:
+      - ./fidasim-controller.py:/app/controller.py:ro
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/frontend.Dockerfile
+    ports:
+      - "8080:80"
+    depends_on:
+      - controller
+    networks:
+      - fidasim-net
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+
+  results:
+    build:
+      context: ..
+      dockerfile: docker/results.Dockerfile
+    ports:
+      - "8081:80"
+    environment:
+      - OUTPUT_DIR=/outputs
+    networks:
+      - fidasim-net
+    volumes:
+      - outputs:/outputs
+      - ./results/results_viewer.py:/app/results_viewer.py:ro
+
+  # Example compute worker for local testing
+  worker:
+    build:
+      context: ..
+      dockerfile: docker/compute.Dockerfile
+    environment:
+      - WORKER_ID=0
+      - RUN_INDICES=[0,1,2]
+      - OMP_NUM_THREADS=4
+      - REDIS_HOST=redis
+      - FIDASIM_DIR=/opt/fidasim
+    depends_on:
+      - redis
+      - controller
+    networks:
+      - fidasim-net
+    volumes:
+      - inputs:/inputs
+      - outputs:/outputs
+      - ./worker/worker.py:/app/worker.py:ro
+
+networks:
+  fidasim-net:
+    driver: bridge
+
+volumes:
+  redis-data:
+  inputs:
+  outputs:

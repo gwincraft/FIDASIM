@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv
+
+# Docker
+*.log
+.dockerignore
+
+# Kubernetes
+*.yaml.bak
+*.yml.bak
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test outputs
+test_outputs/
+test_results/
+*.h5
+*.hdf5
+*.nc
+*.cdf
+
+# Temporary files
+tmp/
+temp/
+cache/
+
+# Secrets (never commit these!)
+secrets/
+*.key
+*.pem
+*.crt
+kubeconfig
+.env
