@@ -1504,3 +1504,50 @@ def nubeam_geometry(nubeam, angle=0.0, verbose=False):
            "adist":nubeam["XLBAPA"] }
 
     return nbi
+
+def read_nc_weights(filename, group='/', verbose=True):
+    """
+    Read neutron collimator weight functions from FIDASIM output
+    
+    Parameters:
+        filename: Path to NC weights HDF5 file
+        group: HDF5 group to read from (default '/')
+        verbose: Print info messages
+        
+    Returns:
+        dict: Contains 'energy', 'pitch', 'weight', 'flux', and optionally 'emissivity'
+    """
+    import h5py
+    
+    if verbose:
+        info(f'Reading NC weights from {filename}')
+    
+    nc_weights = {}
+    
+    with h5py.File(filename, 'r') as f:
+        if 'ncweight' in f:
+            g = f['ncweight']
+            nc_weights['energy'] = g['energy'][:]
+            nc_weights['pitch'] = g['pitch'][:]
+            nc_weights['weight'] = g['weight'][:]
+            nc_weights['flux'] = g['flux'][:]
+            
+            if 'emissivity' in g:
+                nc_weights['emissivity'] = g['emissivity'][:]
+                
+            if 'r' in g:
+                nc_weights['r'] = g['r'][:]
+            if 'z' in g:
+                nc_weights['z'] = g['z'][:]
+                
+            if verbose:
+                ne = len(nc_weights['energy'])
+                np_ = len(nc_weights['pitch'])
+                nchan = nc_weights['weight'].shape[2]
+                info(f'  Energy bins: {ne}')
+                info(f'  Pitch bins: {np_}')
+                info(f'  Channels: {nchan}')
+        else:
+            error('No ncweight group found in file')
+            
+    return nc_weights
