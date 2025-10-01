@@ -14339,16 +14339,23 @@ subroutine neutron_weights
                         !! Apply anisotropy correction
                         call get_ddnhe_anisotropy(plasma, vi, vn, kappa)
                         
+                        !! Get fast-ion density at this energy and pitch
+                        fbm_denf = 0.d0
+                        if (inputs%dist_type.eq.1) then
+                            call get_ep_denf(eb, pitch, fbm_denf, coeffs=fields%b)
+                        endif
+                        
                         !! Weight function contribution
                         !$OMP ATOMIC UPDATE
                         ncweight%weight(ie,ip,ichan) = ncweight%weight(ie,ip,ichan) + &
-                            rate * kappa * domega * beam_grid%dv / (ngamma * dE * dP)
+                            rate * kappa * domega * tracks(i)%time / (ngamma * dE * dP)
                         
-                        !! Flux contribution (assuming some fast-ion density)
-                        fbm_denf = 1.0d12  ! Placeholder - would need actual distribution
-                        !$OMP ATOMIC UPDATE
-                        ncweight%flux(ie,ichan) = ncweight%flux(ie,ichan) + &
-                            rate * kappa * domega * fbm_denf * beam_grid%dv / (ngamma * dE)
+                        !! Flux contribution using actual fast-ion density
+                        if (fbm_denf.gt.0.d0) then
+                            !$OMP ATOMIC UPDATE
+                            ncweight%flux(ie,ichan) = ncweight%flux(ie,ichan) + &
+                                rate * kappa * domega * fbm_denf * tracks(i)%time / (ngamma * dE)
+                        endif
                     enddo ! gyro_loop
                 enddo ! track loop
             enddo ! energy loop
@@ -14358,8 +14365,9 @@ subroutine neutron_weights
     
     !! Calculate channel-resolved emissivity if requested
     if(inputs%calc_nc_wght.ge.2) then
-        !$OMP PARALLEL DO schedule(guided) collapse(2) &
-        !$OMP& private(i,j,ichan,ri,rate)
+        !$OMP PARALLEL DO schedule(guided) collapse(3) &
+        !$OMP& private(i,j,ichan,ri,vi,r_detector,vn,d,domega,ie,ip,eb,pitch,&
+        !$OMP& plasma,fields,igamma,vnet_square,erel,rate,kappa,fbm_denf)
         do ichan=1,nc_chords%nchan
             do j=1,inter_grid%nz
                 do i=1,inter_grid%nr
@@ -14368,12 +14376,60 @@ subroutine neutron_weights
                     call get_plasma(plasma, pos=ri, input_coords=1)
                     if(.not.plasma%in_plasma) cycle
                     
-                    !! Simple estimate of local neutron emissivity
-                    !! Would need to integrate over local fast-ion distribution
-                    ncweight%emissivity(i,j,ichan) = 0.d0  ! Placeholder
-                enddo
-            enddo
-        enddo
+                    call get_fields(fields, pos=ri, input_coords=1)
+                    if(.not.fields%in_plasma) cycle
+                    
+                    !! Get detector direction for anisotropy calculation
+                    r_detector = nc_chords%det(ichan)%detector%origin
+                    vn = r_detector - ri
+                    d = norm2(vn)
+                    if(d.gt.0.d0) vn = vn/d
+                    
+                    !! Calculate solid angle
+                    if (nc_chords%det(ichan)%detector%shape.eq.1) then
+                        domega = nc_chords%det(ichan)%detector%hh * &
+                                nc_chords%det(ichan)%detector%hw / (pi * d**2)
+                    else
+                        domega = nc_chords%det(ichan)%detector%hh * &
+                                nc_chords%det(ichan)%detector%hw / (4 * d**2)
+                    endif
+                    
+                    !! Integrate over fast-ion distribution
+                    do ip=1,inputs%np_nc
+                        pitch = ptcharr(ip)
+                        do ie=1,inputs%ne_nc
+                            eb = ebarr(ie)
+                            
+                            !! Get fast-ion density
+                            fbm_denf = 0.d0
+                            if (inputs%dist_type.eq.1) then
+                                call get_ep_denf(eb, pitch, fbm_denf, coeffs=fields%b)
+                            endif
+                            if (fbm_denf.le.0.d0) cycle
+                            
+                            !! Gyro-average
+                            do igamma=1,ngamma
+                                call gyro_correction(fields, eb, pitch, beam_mass/H1_amu, ri, vi)
+                                
+                                !! Calculate effective energy
+                                vnet_square = dot_product(vi-plasma%vrot, vi-plasma%vrot)
+                                erel = v2_to_E_per_amu * beam_mass * vnet_square
+                                
+                                !! Get neutron production rate
+                                call get_dd_rate(plasma, erel, rate, branch=2)
+                                
+                                !! Apply anisotropy correction
+                                call get_ddnhe_anisotropy(plasma, vi, vn, kappa)
+                                
+                                !$OMP ATOMIC UPDATE
+                                ncweight%emissivity(i,j,ichan) = ncweight%emissivity(i,j,ichan) + &
+                                    rate * kappa * domega * fbm_denf * dE * dP / ngamma
+                            enddo ! gyro
+                        enddo ! energy
+                    enddo ! pitch
+                enddo ! r
+            enddo ! z  
+        enddo ! channel
         !$OMP END PARALLEL DO
     endif
     
