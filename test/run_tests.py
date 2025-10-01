@@ -117,16 +117,32 @@ def test_nc():
         nc_chords: A dictionary representing the Neutron Collimator geometry.
     """
 
-    # Chords
+    # Chords - NC system on bottom floor pointing upward
     nchan = 47
-    ulens = np.arange(nchan) * 3 + 101
-    vlens = np.zeros(nchan)
-    wlens = np.full(nchan, -100.0)
+
+    # Place NC system below the tokamak, pointing upward
+    # Aperture/lens position (same location for particle system)
+    ulens = np.full(nchan, 0.0)      # Centered in X
+    vlens = np.full(nchan, -170.0)   # In the beam Y range
+    wlens = np.full(nchan, -200.0)   # Below the tokamak floor
     lens = np.array([ulens, vlens, wlens]).T  # Transpose for correct shape
 
-    ulos = np.arange(nchan) * 3 + 101
+    # LOS endpoints - create a fan that spreads out as it goes up
+    # The beam grid is at X:[-50,50], Y:[-230,-110], Z:[-70,70]
+    ulos = np.zeros(nchan)
     vlos = np.zeros(nchan)
     wlos = np.zeros(nchan)
+
+    # Create a fan in the X direction (across the beam)
+    # Middle channels (around channel 23) should hit the beam grid
+    # Edge channels should miss
+    for i in range(nchan):
+        # Fan out in X direction from -100 to +100 at Z=0
+        # This ensures middle channels hit beam grid X:[-50,50]
+        ulos[i] = -100.0 + i * 200.0 / (nchan - 1)
+        vlos[i] = -170.0  # Keep Y constant in beam range
+        wlos[i] = 0.0     # Target Z=0 plane (middle of beam grid)
+
     radius = np.sqrt(ulos**2 + vlos**2)
     id = np.array([b"c" + str(i).encode('utf-8') for i in range(nchan)])  # Generate IDs
 
