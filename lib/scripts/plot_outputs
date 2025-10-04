@@ -448,8 +448,12 @@ def get_neutron_rate(fpath):
     data_neutron_set = np.empty(N)
     label_neutron_set = []
     has_flux = False
+    has_eflux = False
     flux_data = []
     flux_labels = []
+    eflux_data = []
+    energy_data = []
+    eflux_labels = []
 
     for i in range(N):
         f = h5py.File(fpath[i], 'r')
@@ -469,8 +473,90 @@ def get_neutron_rate(fpath):
                 flux_data.append(np.sum(flux, axis=0))
             flux_labels.append(extract_runid(fpath[i]))
 
-    # Plot NC flux if available
-    if has_flux:
+        # Check for energy-resolved flux data
+        if 'eflux' in f and 'energy_nc' in f:
+            has_eflux = True
+            eflux = f['eflux'][()]
+            energy = f['energy_nc'][()]
+
+            # Handle different dimensionalities
+            # HDF5 file has eflux with shape matching Fortran declaration
+            # Check if we need to transpose based on dimensions
+            if eflux.ndim == 2:
+                # Determine if shape is (energy, chan) or (chan, energy)
+                if eflux.shape[0] == len(energy):
+                    # Shape is already (energy, chan) - no transpose needed
+                    eflux_data.append(eflux)
+                else:
+                    # Shape is (chan, energy) - transpose to (energy, chan)
+                    eflux_data.append(eflux.T)
+            else:
+                # Shape is (energy, nclass, chan) or similar - sum over classes
+                if eflux.shape[0] == len(energy):
+                    eflux_data.append(np.sum(eflux, axis=1))
+                else:
+                    eflux_data.append(np.sum(eflux, axis=1).T)
+
+            energy_data.append(energy)
+            eflux_labels.append(extract_runid(fpath[i]))
+
+    # Plot energy-resolved NC flux if available
+    if has_eflux:
+        # Get number of channels from first file
+        nchan = eflux_data[0].shape[1]
+
+        # Create subplots for each channel (max 9 channels per figure)
+        channels_per_fig = 9
+        n_figs = (nchan - 1) // channels_per_fig + 1
+
+        for fig_idx in range(n_figs):
+            start_chan = fig_idx * channels_per_fig
+            end_chan = min(start_chan + channels_per_fig, nchan)
+            n_channels_in_fig = end_chan - start_chan
+
+            # Create subplot grid
+            n_rows = int(np.ceil(n_channels_in_fig / 3))
+            n_cols = min(3, n_channels_in_fig)
+
+            fig, axes = plt.subplots(n_rows, n_cols, figsize=(12, 3*n_rows))
+            if n_channels_in_fig == 1:
+                axes = [axes]
+            else:
+                axes = axes.flatten() if n_rows > 1 or n_cols > 1 else [axes]
+
+            for idx, chan in enumerate(range(start_chan, end_chan)):
+                ax = axes[idx]
+
+                # Plot energy spectra for each file
+                for i, (eflux, energy, label) in enumerate(zip(eflux_data, energy_data, eflux_labels)):
+                    ax.plot(energy, eflux[:, chan], label=label, linewidth=2)
+
+                ax.set_xlabel('Energy [keV]')
+                ax.set_ylabel('Flux [neutrons/(s·keV)]')
+                ax.set_title(f'Channel {chan+1}')
+                ax.grid(True, alpha=0.3)
+                ax.legend()
+
+                # Use log scale if data spans multiple orders of magnitude
+                if np.max(eflux[:, chan]) > 0:
+                    ratio = np.max(eflux[:, chan]) / (np.min(eflux[:, chan][eflux[:, chan] > 0]) + 1e-30)
+                    if ratio > 100:
+                        ax.set_yscale('log')
+
+            # Hide unused subplots
+            for idx in range(n_channels_in_fig, len(axes)):
+                axes[idx].set_visible(False)
+
+            fig.suptitle('Neutron Energy Spectra')
+            fig.tight_layout()
+
+            # Save figure
+            filename = f'nc_energy_spectra_{fig_idx+1}.png' if n_figs > 1 else 'nc_energy_spectra.png'
+            plt.savefig(filename, transparent=True)
+            print(f'\nNC energy spectra plot saved as: {filename}')
+
+    # Also plot integrated flux bar chart if available (but only if no energy-resolved data)
+    elif has_flux:
         fig, ax = plt.subplots()
         width = 0.8 / N  # Bar width for multiple files
         x = np.arange(len(flux_data[0]))  # Channel numbers
@@ -481,7 +567,7 @@ def get_neutron_rate(fpath):
 
         ax.set_xlabel('NC Channel')
         ax.set_ylabel('Neutron Flux [neutrons/s]')
-        ax.set_title('NC Channel Flux')
+        ax.set_title('NC Channel Flux (Integrated)')
         ax.legend()
         ax.grid(True, alpha=0.3)
         fig.tight_layout()

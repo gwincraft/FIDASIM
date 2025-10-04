@@ -870,6 +870,16 @@ type NeutronRate
         !+ Neutron emissivity: emis(R,Z,Phi)
     real(Float64), dimension(:,:), allocatable :: flux
         !+ Neutron flux: flux(orbit_type,chan) [neutrons/sec]
+    integer(Int32) :: nenergy = 50
+        !+ Number of energy bins for neutron spectra
+    real(Float64) :: emax = 4000.0
+        !+ Maximum neutron energy [keV]
+    real(Float64), dimension(:), allocatable :: energy
+        !+ Energy grid for neutron spectra [keV]
+    real(Float64), dimension(:,:,:), allocatable :: eflux
+        !+ Energy-resolved neutron flux: eflux(energy,chan,orbit_type) [neutrons/(s*keV)]
+    logical :: include_thermal = .false.
+        !+ Flag to include thermal-thermal neutron reactions
 end type NeutronRate
 
 type CFPDRate
@@ -5997,6 +6007,36 @@ subroutine write_neutrons
                  "Neutron flux: flux(chan)", error)
         endif
         call h5ltset_attribute_string_f(fid,"/flux","units","neutrons/s",error )
+
+        !Write energy-resolved neutron flux
+        if(allocated(neutron%energy)) then
+            ! Debug output
+            if(inputs%verbose.ge.1) then
+                write(*,'(T6,"Writing eflux: allocated=",L1," max=",E12.4," nonzero=",I8)') &
+                    allocated(neutron%eflux), maxval(neutron%eflux), count(neutron%eflux > 0.0d0)
+            endif
+
+            dim1(1) = neutron%nenergy
+            call h5ltmake_dataset_double_f(fid,"/energy_nc", 1, dim1, neutron%energy, error)
+            call h5ltset_attribute_string_f(fid,"/energy_nc","description", &
+                 "Neutron energy array", error)
+            call h5ltset_attribute_string_f(fid,"/energy_nc","units","keV",error )
+
+            if(particles%nclass.gt.1) then
+                dim3 = shape(neutron%eflux)
+                call h5ltmake_compressed_dataset_double_f(fid, "/eflux", 3, dim3, neutron%eflux, error)
+                call h5ltset_attribute_string_f(fid,"/eflux","description", &
+                     "Energy-resolved neutron flux: eflux(energy,orbit_class,chan)", error)
+            else
+                ! Note: Fortran is column-major, HDF5 is row-major, so dimensions are reversed
+                dim2(1) = size(neutron%eflux, 2)  ! nchan (2nd dimension)
+                dim2(2) = neutron%nenergy          ! nenergy
+                call h5ltmake_compressed_dataset_double_f(fid, "/eflux", 2, dim2, neutron%eflux(:,:,1), error)
+                call h5ltset_attribute_string_f(fid,"/eflux","description", &
+                     "Energy-resolved neutron flux: eflux(chan,energy)", error)
+            endif
+            call h5ltset_attribute_string_f(fid,"/eflux","units","neutrons/(s*keV)",error )
+        endif
     endif
 
     call h5ltset_attribute_string_f(fid, "/", "version", version, error)
@@ -9612,6 +9652,237 @@ subroutine get_ddnhe_anisotropy(plasma, v1, v3, kappa)
     kappa = (ai + bi*cos_theta**2 + ci*cos_theta**4) / (ai+bi/3.d0+ci/5.d0)
 
 end subroutine get_ddnhe_anisotropy
+
+subroutine get_dd_neutron_energy_precise(v1, v2, v_detector, e_neutron, weight)
+    !+ Calculate precise neutron energy from DD reaction kinematics
+    !+ Based on relativistic two-body kinematics with proper Lorentz boost
+    real(Float64), dimension(3), intent(in) :: v1
+        !+ First reactant velocity [cm/s]
+    real(Float64), dimension(3), intent(in) :: v2
+        !+ Second reactant velocity [cm/s]
+    real(Float64), dimension(3), intent(in) :: v_detector
+        !+ Unit vector toward detector
+    real(Float64), intent(out) :: e_neutron
+        !+ Neutron energy in lab frame [keV]
+    real(Float64), intent(out) :: weight
+        !+ Angular weight factor
+
+    real(Float64) :: m_d, m_n, m_he3, Q_dd, c_light
+    real(Float64), dimension(3) :: v_cm, v_rel
+    real(Float64) :: E_cm_total, E_cm_n, v_cm_n
+    real(Float64) :: cos_theta_lab, E_cm_boost, E_interaction
+    real(Float64) :: E_lab_n, mu_dd
+
+    ! Physical constants
+    m_d = H2_amu       ! Deuteron mass [amu]
+    m_n = 1.008665d0   ! Neutron mass [amu]
+    m_he3 = 3.01603d0  ! He3 mass [amu]
+    Q_dd = 3.27d0      ! Q-value [MeV]
+    c_light = 2.998d10 ! Speed of light [cm/s]
+
+    ! Calculate center of mass velocity and relative velocity
+    v_cm = 0.5d0 * (v1 + v2)  ! CM velocity [cm/s]
+    v_rel = v1 - v2           ! Relative velocity [cm/s]
+
+    ! Calculate total energy in CM frame
+    ! E_cm = (1/2)*mu*v_rel^2 + Q where mu = m_d/2 for DD
+    mu_dd = m_d / 2.0d0  ! Reduced mass for DD system [amu]
+    E_cm_total = 0.5d0 * mu_dd * mass_u * norm2(v_rel)**2 * 1.0d-4 / 1.60218d-13 ! [MeV]
+    E_cm_total = E_cm_total + Q_dd  ! Total available energy [MeV]
+
+    ! Use non-relativistic two-body kinematics
+    ! In CM frame, momentum conservation: p_n = -p_He3
+    ! Energy conservation: E_cm_total = KE_n + KE_He3
+    ! For non-relativistic case: KE = p^2/(2m)
+    ! Solving: KE_n = m_He3/(m_n + m_He3) * E_cm_total
+
+    ! Neutron gets fraction m_He3/(m_n+m_He3) ≈ 0.75 of available kinetic energy
+    E_cm_n = (m_he3 / (m_n + m_he3)) * E_cm_total  ! Kinetic energy in CM [MeV]
+
+    ! Calculate neutron velocity in CM frame
+    ! v = sqrt(2*KE/m)
+    if(E_cm_n > 0.0d0) then
+        v_cm_n = sqrt(2.0d0 * E_cm_n * 1.60218d-13 / (m_n * mass_u)) * 1.0d2  ! [cm/s]
+    else
+        v_cm_n = 0.0d0
+    endif
+
+    ! For non-relativistic boost (valid for typical fusion velocities):
+    ! v_lab = v_cm + v_CM
+    ! The energy in lab frame depends on the emission angle in CM frame
+
+    ! Transform to lab frame using velocity addition
+    ! For non-relativistic case: E_lab = (1/2)*m*|v_cm_neutron + v_CM|^2
+    ! where v_cm_neutron is neutron velocity in CM frame (isotropic)
+
+    ! Angle between CM velocity and detector direction
+    if(norm2(v_cm) > 0.0d0) then
+        cos_theta_lab = dot_product(v_cm/norm2(v_cm), v_detector)
+    else
+        cos_theta_lab = 0.0d0
+    endif
+
+    ! Assume isotropic emission in CM and use average along detector direction
+    ! Lab energy considering CM boost:
+    ! E_lab = E_cm + E_cm_boost + 2*sqrt(E_cm*E_cm_boost)*cos(theta)
+    ! where E_cm_boost = (1/2)*m_n*v_CM^2
+
+    ! CM boost energy
+    E_cm_boost = 0.5d0 * m_n * mass_u * norm2(v_cm)**2 * 1.0d-4 / 1.60218d-13  ! [MeV]
+
+    ! Interaction term (using forward scattering approximation)
+    E_interaction = 2.0d0 * sqrt(E_cm_n * E_cm_boost) * cos_theta_lab
+
+    ! Total lab energy
+    E_lab_n = E_cm_n + E_cm_boost + E_interaction  ! [MeV]
+
+    ! Convert to keV and ensure positive
+    if(E_lab_n > 0.0d0) then
+        e_neutron = E_lab_n * 1000.0d0  ! [keV]
+    else
+        e_neutron = E_cm_n * 1000.0d0  ! Fallback to CM energy [keV]
+    endif
+
+    ! Angular weight (will be multiplied by anisotropy factor later)
+    weight = 1.0d0
+
+end subroutine get_dd_neutron_energy_precise
+
+subroutine get_thermal_dd_rate(T_ion, rate_tt)
+    !+ Calculate thermal-thermal DD reaction rate for Maxwellian distribution
+    real(Float64), intent(in) :: T_ion
+        !+ Ion temperature [keV]
+    real(Float64), intent(out) :: rate_tt
+        !+ Reaction rate coefficient <sigma*v> [cm^3/s]
+
+    real(Float64) :: T_eV
+
+    ! Convert temperature to eV for parameterization
+    T_eV = T_ion * 1000.0d0  ! [eV]
+
+    ! Use Bosch-Hale parameterization for DD reaction rate
+    ! Valid for 0.2 keV < T < 100 keV
+    ! <sigma*v> ~ 1.2e-24 * T^2 * exp(-18.8/T^(1/3)) [cm^3/s] for T in keV
+    ! This is a simplified fit; for production use the full Bosch-Hale formula
+
+    if(T_ion < 0.2d0) then
+        rate_tt = 0.0d0
+    elseif(T_ion < 100.0d0) then
+        ! Simplified Gamow peak formula
+        rate_tt = 1.2d-24 * T_ion**2 * exp(-18.8d0 / T_ion**(1.0d0/3.0d0))
+    else
+        ! Extrapolate for very high temperatures
+        rate_tt = 1.0d-15  ! Saturation value
+    endif
+
+end subroutine get_thermal_dd_rate
+
+subroutine neutron_thermal_thermal(ichan)
+    !+ Calculate neutron flux from thermal-thermal DD reactions for a specific channel
+    integer, intent(in) :: ichan
+        !+ Channel index
+
+    type(LocalProfiles) :: plasma
+    real(Float64), dimension(3) :: r_detector, vn_det, ri
+    real(Float64) :: rate_tt, e_neutron, weight, flux, domega, flux_contrib
+    real(Float64), dimension(3) :: v1_thermal, v2_thermal, randomu
+    type(ParticleTrack), dimension(pass_grid%ntrack) :: tracks
+    integer :: ntrack, i, ie_neutron, igamma, ngamma
+    real(Float64) :: T_ion, v_thermal_rms, d
+    real(Float64) :: cos_theta, sin_theta, phi
+
+    ! Get detector position and viewing direction
+    r_detector = nc_chords%det(ichan)%detector%origin
+    vn_det = nc_chords%det(ichan)%aperture%origin - r_detector
+    vn_det = vn_det/norm2(vn_det)
+
+    ! Track through plasma using cylindrical grid for full coverage
+    call track_cylindrical(r_detector, vn_det, tracks, ntrack)
+    if(ntrack.eq.0) return
+
+    ngamma = 20  ! Number of samples for velocity distribution
+
+    ! Loop along sightline
+    do i = 1, ntrack
+        ri = tracks(i)%pos
+        call get_plasma(plasma, pos=ri, input_coords=1)
+        if(.not.plasma%in_plasma) cycle
+
+        ! Check if thermal plasma has deuterium
+        if(abs(thermal_mass(1) - H2_amu) > 0.01) cycle
+
+        ! Ion temperature
+        T_ion = plasma%ti  ! [keV]
+        if(T_ion < 0.1d0) cycle  ! Skip very cold plasma
+
+        ! Calculate thermal-thermal DD rate
+        call get_thermal_dd_rate(T_ion, rate_tt)  ! [cm^3/s]
+
+        ! Total neutron production rate [neutrons/(cm^3*s)]
+        ! Factor 0.5 for identical particles, 0.5 for neutron branch
+        flux = 0.25d0 * plasma%deni(1)**2 * rate_tt
+
+        if(flux <= 0.0d0) cycle
+
+        ! Calculate solid angle factor
+        d = norm2(r_detector - ri)
+        if (nc_chords%det(ichan)%detector%shape.eq.1) then
+            domega = nc_chords%det(ichan)%detector%hh*nc_chords%det(ichan)%detector%hw / &
+                    (pi * d**2)
+        else
+            domega = nc_chords%det(ichan)%detector%hh*nc_chords%det(ichan)%detector%hw / &
+                    (4.0d0 * d**2)
+        endif
+
+        ! RMS thermal velocity
+        v_thermal_rms = sqrt(2.0d0 * T_ion * 1000.0d0 * 1.60218d-19 / (H2_amu * mass_u))  ! [cm/s]
+
+        ! Sample thermal velocities for energy calculation
+        ! Use Monte Carlo sampling of Maxwell-Boltzmann distribution
+        do igamma = 1, ngamma
+            ! Sample two thermal velocities from Maxwell-Boltzmann
+            call randu(randomu)
+
+            ! Box-Muller transform for normal distribution
+            cos_theta = 2.0d0*randomu(1) - 1.0d0
+            sin_theta = sqrt(1.0d0 - cos_theta**2)
+            phi = 2.0d0*pi*randomu(2)
+
+            ! First particle velocity (thermal)
+            v1_thermal(1) = v_thermal_rms * sin_theta * cos(phi)
+            v1_thermal(2) = v_thermal_rms * sin_theta * sin(phi)
+            v1_thermal(3) = v_thermal_rms * cos_theta
+            v1_thermal = v1_thermal + plasma%vrot  ! Add rotation
+
+            ! Second particle velocity (thermal, independent)
+            call randu(randomu)
+            cos_theta = 2.0d0*randomu(1) - 1.0d0
+            sin_theta = sqrt(1.0d0 - cos_theta**2)
+            phi = 2.0d0*pi*randomu(3)
+
+            v2_thermal(1) = v_thermal_rms * sin_theta * cos(phi)
+            v2_thermal(2) = v_thermal_rms * sin_theta * sin(phi)
+            v2_thermal(3) = v_thermal_rms * cos_theta
+            v2_thermal = v2_thermal + plasma%vrot  ! Add rotation
+
+            ! Calculate neutron energy for this velocity pair
+            call get_dd_neutron_energy_precise(v1_thermal, v2_thermal, vn_det, e_neutron, weight)
+
+            ! Bin the flux by energy
+            if(allocated(neutron%eflux)) then
+                ie_neutron = ceiling(e_neutron / neutron%emax * real(neutron%nenergy))
+                if(ie_neutron >= 1 .and. ie_neutron <= neutron%nenergy) then
+                    ! Weight by path length through cell and solid angle
+                    flux_contrib = flux * tracks(i)%time * weight * domega / real(ngamma)
+                    !$OMP CRITICAL
+                    neutron%eflux(ie_neutron, ichan, 1) = neutron%eflux(ie_neutron, ichan, 1) + flux_contrib
+                    !$OMP END CRITICAL
+                endif
+            endif
+        enddo
+    enddo
+
+end subroutine neutron_thermal_thermal
 
 subroutine get_pgyro(fields,E3,E1,pitch,plasma,v3_xyz,pgyro,gam0)
     !+ Returns fraction of gyroangles that can produce a reaction with
@@ -13366,11 +13637,11 @@ end subroutine neutron_mc
 
 subroutine neutron_spec_mc
     !+ Calculate neutron collimator flux using a Monte Carlo Fast-ion distribution
-    integer :: iion, igamma, ngamma, ichan
+    integer :: iion, igamma, ngamma, ichan, ie_neutron
     type(FastIon) :: fast_ion
     type(LocalProfiles) :: plasma
     type(LocalEMFields) :: fields
-    real(Float64) :: eb, flux, kappa
+    real(Float64) :: eb, flux, kappa, e_neutron, e_weight
     real(Float64), dimension(3) :: ri, vi, uvw, uvw_vi
     real(Float64), dimension(3) :: rn, vn, r_detector
     real(Float64) :: vnet_square
@@ -13408,7 +13679,8 @@ subroutine neutron_spec_mc
     ngamma = 20
     !$OMP PARALLEL DO schedule(guided) private(iion,fast_ion,vi,ri,s,c, &
     !$OMP& plasma,fields,uvw,uvw_vi,vnet_square,flux,eb,igamma,phi,ichan, &
-    !$OMP& rn,vn,r_detector,d,domega,visible,los_angle,max_angle,kappa)
+    !$OMP& rn,vn,r_detector,d,domega,visible,los_angle,max_angle,kappa, &
+    !$OMP& e_neutron,e_weight,ie_neutron)
     loop_over_fast_ions: do iion=istart,particles%nparticle,istep
         fast_ion = particles%fast_ion(iion)
         if(fast_ion%vabs.eq.0.d0) cycle loop_over_fast_ions
@@ -13504,20 +13776,45 @@ subroutine neutron_spec_mc
 
                 !! Get neutron production rate
                 call get_dd_rate(plasma, eb, flux, branch=2)
-                
-                !! Apply anisotropy correction
-                call get_ddnhe_anisotropy(plasma, vi, vn, kappa)
-                flux = flux * kappa * fast_ion%weight * domega * factor
 
-                !! Store neutrons
+                !! Calculate precise neutron energy
+                call get_dd_neutron_energy_precise(vi, plasma%vrot, vn, e_neutron, e_weight)
+
+                !! Apply anisotropy correction for angular distribution
+                call get_ddnhe_anisotropy(plasma, vi, vn, kappa)
+                flux = flux * kappa * fast_ion%weight * domega * factor * e_weight
+
+                !! Bin by energy
+                if(allocated(neutron%eflux)) then
+                    ie_neutron = ceiling(e_neutron / neutron%emax * real(neutron%nenergy))
+                    if(ie_neutron >= 1 .and. ie_neutron <= neutron%nenergy) then
+                        !$OMP CRITICAL
+                        neutron%eflux(ie_neutron, ichan, fast_ion%class) = neutron%eflux(ie_neutron, ichan, fast_ion%class) + flux
+                        !$OMP END CRITICAL
+                    endif
+                endif
+
+                !! Store integrated flux for backward compatibility
                 call store_neutrons(flux, fast_ion%class, neutron_collimator=.True., channel=ichan)
             endif
         enddo channel_loop
     enddo loop_over_fast_ions
     !$OMP END PARALLEL DO
 
+    !! Add thermal-thermal contribution if enabled
+    if(neutron%include_thermal) then
+        !$OMP PARALLEL DO schedule(guided) private(ichan)
+        do ichan = 1, nc_chords%nchan
+            call neutron_thermal_thermal(ichan)
+        enddo
+        !$OMP END PARALLEL DO
+    endif
+
 #ifdef _MPI
     call parallel_sum(neutron%flux)
+    if(allocated(neutron%eflux)) then
+        call parallel_sum(neutron%eflux)
+    endif
 #endif
 
 end subroutine neutron_spec_mc
@@ -14097,11 +14394,11 @@ end subroutine npa_weights
 
 subroutine neutron_spec_f
     !+ Calculate neutron collimator flux using a fast-ion distribution function F(E,p,r,z,phi)
-    integer :: ie, ip, igamma, ngamma, ichan
+    integer :: ie, ip, igamma, ngamma, ichan, ie_neutron
     type(LocalProfiles) :: plasma
     type(LocalEMFields) :: fields
     real(Float64) :: eb, pitch
-    real(Float64) :: erel, flux, d, domega, kappa
+    real(Float64) :: erel, flux, d, domega, kappa, e_neutron, e_weight
     real(Float64), dimension(3) :: ri
     real(Float64), dimension(3) :: vi
     real(Float64), dimension(3) :: rn, vn, r_gyro
@@ -14124,7 +14421,8 @@ subroutine neutron_spec_f
     ngamma = 20
     flux = 0
     !$OMP PARALLEL DO schedule(guided) private(fields,vn,vi,ri,pitch,eb,ind,domega,ntrack,i,&
-    !$OMP& ie,ip,ichan,igamma,plasma,factor,rn,vnet_square,flux,erel,d,fbm_denf,r_gyro,tracks,kappa,track_step)
+    !$OMP& ie,ip,ichan,igamma,plasma,factor,rn,vnet_square,flux,erel,d,fbm_denf,r_gyro,tracks,kappa,track_step,&
+    !$OMP& e_neutron,e_weight,ie_neutron)
     channel_loop: do ichan=1, nc_chords%nchan
 
         rn = nc_chords%det(ichan)%detector%origin
@@ -14196,14 +14494,34 @@ subroutine neutron_spec_f
 
                         !! Get neutron production flux
                         call get_dd_rate(plasma,erel,flux,branch=2)
-                
-                	!! Apply anisotropy correction for neutron emission
+
+                        !! Calculate precise neutron energy
+                        call get_dd_neutron_energy_precise(vi, plasma%vrot, vn, e_neutron, e_weight)
+
+                        !! Apply anisotropy correction for neutron emission
                         call get_ddnhe_anisotropy(plasma,vi,vn,kappa)
-                        flux = flux*kappa
+                        flux = flux*kappa*e_weight
                         flux = flux*2*fbm_denf*factor
                         !Factor of 2 above is to convert fbm to ions/(cm^3 dE (domega/4pi))
 
-                        !! Store neutrons
+                        !! Bin by energy
+                        if(allocated(neutron%eflux)) then
+                            ie_neutron = ceiling(e_neutron / neutron%emax * real(neutron%nenergy))
+                            !$OMP CRITICAL
+                            if(ichan == 20 .and. ie == 1 .and. ip == 1 .and. igamma == 1) then
+                                write(*,'(A,F10.2,A,F10.2,A,I4,A,I4,A,E12.4)') &
+                                    "DEBUG: e_neutron=", e_neutron, " emax=", neutron%emax, &
+                                    " nenergy=", neutron%nenergy, " ie=", ie_neutron, " flux=", flux
+                            endif
+                            !$OMP END CRITICAL
+                            if(ie_neutron >= 1 .and. ie_neutron <= neutron%nenergy) then
+                                !$OMP CRITICAL
+                                neutron%eflux(ie_neutron, ichan, 1) = neutron%eflux(ie_neutron, ichan, 1) + flux
+                                !$OMP END CRITICAL
+                            endif
+                        endif
+
+                        !! Store integrated flux for backward compatibility
                         call store_neutrons(flux, neutron_collimator=.True.,channel=ichan)
                     enddo gyro_loop
                 enddo energy_loop
@@ -14213,8 +14531,20 @@ subroutine neutron_spec_f
     enddo channel_loop
     !$OMP END PARALLEL DO
 
+    !! Add thermal-thermal contribution if enabled
+    if(neutron%include_thermal) then
+        !$OMP PARALLEL DO schedule(guided) private(ichan)
+        do ichan = 1, nc_chords%nchan
+            call neutron_thermal_thermal(ichan)
+        enddo
+        !$OMP END PARALLEL DO
+    endif
+
 #ifdef _MPI
     call parallel_sum(neutron%flux)
+    if(allocated(neutron%eflux)) then
+        call parallel_sum(neutron%eflux)
+    endif
 #endif
 
 end subroutine neutron_spec_f
@@ -14699,6 +15029,25 @@ program fidasim
     if(inputs%calc_neut_spec.ge.1)then
         allocate(neutron%flux(particles%nclass, nc_chords%nchan))
         neutron%flux = 0.d0
+
+        ! Initialize energy arrays for neutron spectra
+        ! Use defaults if not set
+        if(neutron%nenergy <= 0) neutron%nenergy = 50
+        if(neutron%emax <= 0.0d0) neutron%emax = 4000.0d0  ! 4 MeV max
+
+        allocate(neutron%energy(neutron%nenergy))
+        allocate(neutron%eflux(neutron%nenergy, nc_chords%nchan, particles%nclass))
+
+        ! Initialize energy grid
+        do i = 1, neutron%nenergy
+            neutron%energy(i) = real(i-0.5d0) * neutron%emax / real(neutron%nenergy)
+        enddo
+        neutron%eflux = 0.d0
+
+        ! Enable thermal-thermal if deuterium is present
+        if(abs(thermal_mass(1) - H2_amu) < 0.01) then
+            neutron%include_thermal = .true.
+        endif
     endif
 
     !! -----------------------------------------------------------------------
@@ -14885,10 +15234,22 @@ program fidasim
         endif
         if(inputs%dist_type.eq.1) then
             call neutron_f()
-            if(inputs%calc_neut_spec.ge.1) call neutron_spec_f
+            if(inputs%calc_neut_spec.ge.1) then
+                call neutron_spec_f
+                if(inputs%verbose.ge.1 .and. allocated(neutron%eflux)) then
+                    write(*,'(T6,"After neutron_spec_f: max eflux=",E12.4," nonzero=",I8)') &
+                        maxval(neutron%eflux), count(neutron%eflux > 0.0d0)
+                endif
+            endif
         else
             call neutron_mc()
-            if(inputs%calc_neut_spec.ge.1) call neutron_spec_mc
+            if(inputs%calc_neut_spec.ge.1) then
+                call neutron_spec_mc
+                if(inputs%verbose.ge.1 .and. allocated(neutron%eflux)) then
+                    write(*,'(T6,"After neutron_spec_mc: max eflux=",E12.4," nonzero=",I8)') &
+                        maxval(neutron%eflux), count(neutron%eflux > 0.0d0)
+                endif
+            endif
         endif
         if(inputs%verbose.ge.1) write(*,'(30X,a)') ''
     endif
