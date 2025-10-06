@@ -872,9 +872,9 @@ type NeutronRate
         !+ Neutron flux: flux(orbit_type,chan) [neutrons/sec]
     integer(Int32) :: nenergy = 100
         !+ Number of energy bins for neutron spectra
-    real(Float64) :: emin = 2200.0
+    real(Float64) :: emin = 2000.0
         !+ Minimum neutron energy [keV]
-    real(Float64) :: emax = 2600.0
+    real(Float64) :: emax = 2800.0
         !+ Maximum neutron energy [keV]
     real(Float64), dimension(:), allocatable :: energy
         !+ Energy grid for neutron spectra [keV]
@@ -9875,8 +9875,9 @@ subroutine neutron_thermal_thermal(ichan)
                 ie_neutron = floor((e_neutron - neutron%emin) / &
                     (neutron%emax - neutron%emin) * real(neutron%nenergy)) + 1
                 if(ie_neutron >= 1 .and. ie_neutron <= neutron%nenergy) then
-                    ! Weight by path length through cell and solid angle
-                    flux_contrib = flux * tracks(i)%time * weight * domega / real(ngamma)
+                    ! Convert to spectral flux [neutrons/(s*keV)] by dividing by bin width
+                    flux_contrib = flux * tracks(i)%time * weight * domega * real(neutron%nenergy) / &
+                        (real(ngamma) * (neutron%emax - neutron%emin))
                     !$OMP CRITICAL
                     neutron%eflux(ie_neutron, ichan, 1) = neutron%eflux(ie_neutron, ichan, 1) + flux_contrib
                     !$OMP END CRITICAL
@@ -13842,7 +13843,9 @@ subroutine neutron_spec_mc
                             ie_neutron = floor((e_neutron - neutron%emin) / &
                                 (neutron%emax - neutron%emin) * real(neutron%nenergy)) + 1
                             if(ie_neutron >= 1 .and. ie_neutron <= neutron%nenergy) then
-                                flux_contrib = flux * e_weight / real(n_thermal)
+                                ! Convert to spectral flux [neutrons/(s*keV)] by dividing by bin width
+                                flux_contrib = flux * e_weight * real(neutron%nenergy) / &
+                                    (real(n_thermal) * (neutron%emax - neutron%emin))
                                 !$OMP CRITICAL
                                 neutron%eflux(ie_neutron, ichan, fast_ion%class) = &
                                     neutron%eflux(ie_neutron, ichan, fast_ion%class) + flux_contrib
@@ -14577,7 +14580,9 @@ subroutine neutron_spec_f
                                     ie_neutron = floor((e_neutron - neutron%emin) / &
                                         (neutron%emax - neutron%emin) * real(neutron%nenergy)) + 1
                                     if(ie_neutron >= 1 .and. ie_neutron <= neutron%nenergy) then
-                                        flux_contrib = flux * e_weight / real(n_thermal)
+                                        ! Convert to spectral flux [neutrons/(s*keV)] by dividing by bin width
+                                        flux_contrib = flux * e_weight * real(neutron%nenergy) / &
+                                            (real(n_thermal) * (neutron%emax - neutron%emin))
                                         !$OMP CRITICAL
                                         neutron%eflux(ie_neutron, ichan, 1) = &
                                             neutron%eflux(ie_neutron, ichan, 1) + flux_contrib
@@ -15098,8 +15103,8 @@ program fidasim
         ! Initialize energy arrays for neutron spectra
         ! Use defaults if not set
         if(neutron%nenergy <= 0) neutron%nenergy = 100
-        if(neutron%emin <= 0.0d0) neutron%emin = 2200.0d0  ! 2.2 MeV min
-        if(neutron%emax <= 0.0d0) neutron%emax = 2600.0d0  ! 2.6 MeV max
+        if(neutron%emin <= 0.0d0) neutron%emin = 2000.0d0  ! 2.0 MeV min
+        if(neutron%emax <= 0.0d0) neutron%emax = 2800.0d0  ! 2.8 MeV max
 
         allocate(neutron%energy(neutron%nenergy))
         allocate(neutron%eflux(neutron%nenergy, nc_chords%nchan, particles%nclass))
