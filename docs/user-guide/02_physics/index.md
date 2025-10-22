@@ -9,3 +9,4 @@ title: Physics
 * [Neutral Particle Analyzer](./06_npa.html)
 * [Phase-space Sensitivities](./07_weights.html)
 * [Cold Neutrals and Passive Signals](./08_passive.html)
+* [Neutron Collimation Diagnostic](./09_neutron_collimation.html)
