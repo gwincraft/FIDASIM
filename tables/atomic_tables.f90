@@ -1091,15 +1091,11 @@ function p_cx(Erel, n_max, m_max) result(sigma)
         !+ Matrix of cross sections where the subscripts correspond
         !+ to the \(n \rightarrow m\) transitions: p_cx[n,m] [\(cm^2\)]
 
-    real(Float64), dimension(12,12) :: sigma_full
+    integer :: n
 
-    integer :: n, m
-
-    do n=1,12
-        sigma_full(n,:) = p_cx_n(Erel, n, 12)
+    do n=1,n_max
+        sigma(n,:) = p_cx_n(Erel, n, m_max)
     enddo
-
-    sigma = sigma_full(1:n_max,1:m_max)
 
 end function p_cx
 
@@ -2068,15 +2064,11 @@ function p_excit(eb, n_max, m_max) result(sigma)
         !+ Matrix of cross sections where the subscripts correspond
         !+ to the \(n \rightarrow m\) transitions: p_excit[n,m] [\(cm^2\)]
 
-    real(Float64), dimension(12,12) :: sigma_full
+    integer :: n
 
-    integer :: n, m
-
-    do n=1,12
-        sigma_full(n,:) = p_excit_n(eb, n, 12)
+    do n=1,n_max
+        sigma(n,:) = p_excit_n(eb, n, m_max)
     enddo
-
-    sigma = sigma_full(1:n_max,1:m_max)
 
 end function p_excit
 
@@ -5363,10 +5355,12 @@ subroutine bt_maxwellian_n_m(fnm, T, eb, am, ab, n, m, rate, deexcit)
     real(Float64) :: vr_max, dvr
     real(Float64), dimension(n_vr) :: vr
     real(Float64), dimension(n_vr) :: fr
+    real(Float64), dimension(n_vr) :: exp_vr
     integer, parameter :: n_vz = 60
     real(Float64) :: vz_max,dvz
     real(Float64), dimension(n_vz) :: vz
     real(Float64), dimension(n_vz) :: fz
+    real(Float64), dimension(n_vz) :: exp_vz
     real(Float64) :: T_per_amu, eb_per_amu, ared, sig, sig_eff
     real(Float64) :: zb, u2_to_erel, u2, erel, dE, factor, En, Em, v_therm
 
@@ -5382,12 +5376,14 @@ subroutine bt_maxwellian_n_m(fnm, T, eb, am, ab, n, m, rate, deexcit)
     dvr = vr_max/(n_vr - 1.d0)
     do i=1,n_vr
         vr(i) = (i-1)*dvr
+        exp_vr(i) = exp(-vr(i)**2.0)
     enddo
 
     vz_max = 4.d0
     dvz = 2.0*vz_max/(n_vz - 1.d0)
     do i=1,n_vz
         vz(i) = (i-1)*dvz - vz_max
+        exp_vz(i) = exp(-vz(i)**2.0)
     enddo
 
     En = (13.6d-3)*(1.0 - (1.d0/n)**2.0)
@@ -5421,7 +5417,7 @@ subroutine bt_maxwellian_n_m(fnm, T, eb, am, ab, n, m, rate, deexcit)
             else
                 sig = 0.d0
             endif
-            fr(j) = factor*sig*sqrt(u2)*exp(-(vz(i)**2.0 + vr(j)**2.0))*vr(j)
+            fr(j) = factor*sig*sqrt(u2)*exp_vz(i)*exp_vr(j)*vr(j)
         enddo
         fz(i) = simpsons_rule(fr, dvr)
     enddo
@@ -5469,10 +5465,12 @@ subroutine bt_maxwellian_q_n_m(fqnm, q, T, eb, am, ab, n, m, rate, deexcit)
     real(Float64) :: vr_max, dvr
     real(Float64), dimension(n_vr) :: vr
     real(Float64), dimension(n_vr) :: fr
+    real(Float64), dimension(n_vr) :: exp_vr
     integer, parameter :: n_vz = 60
     real(Float64) :: vz_max,dvz
     real(Float64), dimension(n_vz) :: vz
     real(Float64), dimension(n_vz) :: fz
+    real(Float64), dimension(n_vz) :: exp_vz
     real(Float64) :: T_per_amu, eb_per_amu, ared, sig, sig_eff
     real(Float64) :: zb, u2_to_erel, u2, erel, dE, factor, En, Em, v_therm
 
@@ -5488,12 +5486,14 @@ subroutine bt_maxwellian_q_n_m(fqnm, q, T, eb, am, ab, n, m, rate, deexcit)
     dvr = vr_max/(n_vr - 1.d0)
     do i=1,n_vr
         vr(i) = (i-1)*dvr
+        exp_vr(i) = exp(-vr(i)**2.0)
     enddo
 
     vz_max = 4.d0
     dvz = 2.0*vz_max/(n_vz - 1.d0)
     do i=1,n_vz
         vz(i) = (i-1)*dvz - vz_max
+        exp_vz(i) = exp(-vz(i)**2.0)
     enddo
 
     En = (13.6d-3)*(1.0 - (1.d0/n)**2.0)
@@ -5527,7 +5527,7 @@ subroutine bt_maxwellian_q_n_m(fqnm, q, T, eb, am, ab, n, m, rate, deexcit)
             else
                 sig = 0.d0
             endif
-            fr(j) = factor*sig*sqrt(u2)*exp(-(vz(i)**2.0 + vr(j)**2.0))*vr(j)
+            fr(j) = factor*sig*sqrt(u2)*exp_vz(i)*exp_vr(j)*vr(j)
         enddo
         fz(i) = simpsons_rule(fr, dvr)
     enddo
@@ -5652,10 +5652,13 @@ subroutine write_bb_H_H(id, namelist_file, n_max, m_max)
 
     cnt = 0
     dlogE = (log10(emax) - log10(emin))/(nenergy - 1)
+    do i=1, nenergy
+        ebarr(i) = 10.d0**(log10(emin) + (i-1)*dlogE)
+    enddo
+
     !$OMP PARALLEL DO private(i, eb)
     do i=istart, nenergy, istep
-        eb = 10.d0**(log10(emin) + (i-1)*dlogE)
-        ebarr(i) = eb
+        eb = ebarr(i)
 
         cx(:,:,i) = p_cx(eb, n_max, m_max)
         excit(:,:,i) = p_excit(eb, n_max, m_max)
@@ -5803,10 +5806,13 @@ subroutine write_bb_H_e(id, namelist_file, n_max, m_max)
 
     cnt = 0
     dlogE = (log10(emax) - log10(emin))/(nenergy - 1)
+    do i=1, nenergy
+        ebarr(i) = 10.d0**(log10(emin) + (i-1)*dlogE)
+    enddo
+
     !$OMP PARALLEL DO private(i, eb)
     do i=istart, nenergy, istep
-        eb = 10.d0**(log10(emin) + (i-1)*dlogE)
-        ebarr(i) = eb
+        eb = ebarr(i)
 
         excit(:,:,i) = e_excit(eb, n_max, m_max)
         ioniz(:,i) = e_ioniz(eb, n_max)
@@ -5972,10 +5978,13 @@ subroutine write_bb_H_Aq(id, namelist_file, n_max, m_max)
 
         cnt = 0
         dlogE = (log10(emax) - log10(emin))/(nenergy - 1)
+        do i=1, nenergy
+            ebarr(i) = 10.d0**(log10(emin) + (i-1)*dlogE)
+        enddo
+
         !$OMP PARALLEL DO private(i, eb)
         do i=istart, nenergy, istep
-            eb = 10.d0**(log10(emin) + (i-1)*dlogE)
-            ebarr(i) = eb
+            eb = ebarr(i)
 
             cx(:,i) = Aq_cx(eb, q(iq), n_max)
             ioniz(:,i) = Aq_ioniz(eb, q(iq), n_max)
@@ -6116,10 +6125,13 @@ subroutine write_bb_D_D(id, namelist_file)
 
     cnt = 0
     dlogE = (log10(emax) - log10(emin))/(nenergy - 1)
+    do i=1, nenergy
+        ebarr(i) = 10.d0**(log10(emin) + (i-1)*dlogE)
+    enddo
+
     !$OMP PARALLEL DO private(i, eb)
     do i=istart, nenergy, istep
-        eb = 10.d0**(log10(emin) + (i-1)*dlogE)
-        ebarr(i) = eb
+        eb = ebarr(i)
 
         fusion(i,1) = d_d_fusion_t(eb)
         fusion(i,2) = d_d_fusion_he(eb)
@@ -6237,10 +6249,13 @@ subroutine write_bb_D_T(id, namelist_file)
 
     cnt = 0
     dlogE = (log10(emax) - log10(emin))/(nenergy - 1)
+    do i=1, nenergy
+        ebarr(i) = 10.d0**(log10(emin) + (i-1)*dlogE)
+    enddo
+
     !$OMP PARALLEL DO private(i, eb)
     do i=istart, nenergy, istep
-        eb = 10.d0**(log10(emin) + (i-1)*dlogE)
-        ebarr(i) = eb
+        eb = ebarr(i)
 
         fusion(i,1) = d_t_fusion(eb)
         cnt = cnt + 1
@@ -6359,10 +6374,13 @@ subroutine write_bb_D_He3(id, namelist_file)
 
     cnt = 0
     dlogE = (log10(emax) - log10(emin))/(nenergy - 1)
+    do i=1, nenergy
+        ebarr(i) = 10.d0**(log10(emin) + (i-1)*dlogE)
+    enddo
+
     !$OMP PARALLEL DO private(i, eb)
     do i=istart, nenergy, istep
-        eb = 10.d0**(log10(emin) + (i-1)*dlogE)
-        ebarr(i) = eb
+        eb = ebarr(i)
 
         fusion(i,1) = d_he3_fusion(eb)
         cnt = cnt + 1
@@ -6518,7 +6536,7 @@ subroutine write_bt_H_H(id, namelist_file, n_max, m_max)
     endif
 
     cnt = 0
-    !$OMP PARALLEL DO private(ie, it, n, m, eb, ti, rate)
+    !$OMP PARALLEL DO COLLAPSE(2) private(ie, it, n, m, eb, ti, rate)
     do ie=istart, nenergy, istep
         eb = ebarr(ie)*H1_amu
         do it=1, ntemp
@@ -6734,7 +6752,7 @@ subroutine write_bt_H_e(id, namelist_file, n_max, m_max)
     endif
 
     cnt = 0
-    !$OMP PARALLEL DO private(ie, it, n, m, eb, ti, rate)
+    !$OMP PARALLEL DO COLLAPSE(2) private(ie, it, n, m, eb, ti, rate)
     do ie=istart, nenergy, istep
         eb = ebarr(ie)*H1_amu
         do it=1, ntemp
@@ -6966,7 +6984,7 @@ subroutine write_bt_H_Aq(id, namelist_file, n_max, m_max)
         endif
 
         cnt = 0
-        !$OMP PARALLEL DO private(ie, it, n, m, eb, ti, rate)
+        !$OMP PARALLEL DO COLLAPSE(2) private(ie, it, n, m, eb, ti, rate)
         do ie=istart, nenergy, istep
             eb = ebarr(ie)*H1_amu
             do it=1, ntemp
